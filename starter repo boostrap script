@@ -1,0 +1,403 @@
+#!/usr/bin/env bash
+# Usage: ./bootstrap.sh [target-folder]
+# Creates a runnable starter repo for the Economic Development Simulator & Dashboard.
+set -euo pipefail
+ROOT="${1:-econ-dev-sim}"
+mkdir -p "$ROOT"
+cd "$ROOT"
+
+create(){
+  mkdir -p "$(dirname "$1")"
+  cat > "$1" <<'EOF'
+$2
+EOF
+}
+
+# -----------------------------
+# ROOT FILES
+# -----------------------------
+cat > README.md <<'EOF'
+# Economic Development Simulator & Dashboard — Starter Repo
+
+This repository bootstraps the MVP stack described in SPEC-001. It includes:
+- **Backend API** (FastAPI) with a health endpoint and scenario run stub
+- **Frontend** (Next.js App Router) wired to the API
+- **Database** (PostgreSQL 16 + Timescale-ready schema) and **Redis** via Docker Compose
+- **Developer tooling** for VS Code and Docker
+
+## Quick Start (Docker)
+```bash
+docker compose up --build
+# Web:  http://localhost:3000
+# API:  http://localhost:8000/docs
+```
+
+## Import into your IDE
+- **VS Code**: open the folder → it picks up `.vscode/launch.json`. Press F5 to run API/Web individually.
+- **JetBrains**: add a Uvicorn run config for `backend` and an npm `dev` run for `frontend/dashboard`.
+
+## Next Steps
+- Paste your full SPEC content into `docs/SPEC-001.md` (copy from canvas).
+- Implement ETL flows in `etl/flows` and the simulation engine under `backend/app/engine`.
+- Configure Terraform under `infra/` when deploying to AWS ap-southeast-5.
+
+## Structure
+```
+backend/               # FastAPI app
+frontend/dashboard/    # Next.js app (App Router)
+etl/                   # Prefect flows (placeholders)
+db/                    # SQL schema
+infra/                 # Terraform (placeholder)
+docs/                  # SPEC and docs
+.vscode/               # IDE launch configs
+```
+EOF
+
+cat > .gitignore <<'EOF'
+# Node / Next.js
+node_modules
+.next
+*.log
+
+# Python
+.venv
+__pycache__
+*.pyc
+
+# Env & tooling
+.env
+.env.*
+.terraform
+terraform.tfstate*
+.DS_Store
+EOF
+
+cat > docker-compose.yml <<'EOF'
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: econ
+    ports: [ "5432:5432" ]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  redis:
+    image: redis:7
+    ports: [ "6379:6379" ]
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/econ
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [ db, redis ]
+    ports: [ "8000:8000" ]
+
+  web:
+    build:
+      context: ./frontend/dashboard
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000
+    depends_on: [ api ]
+    ports: [ "3000:3000" ]
+
+volumes:
+  pgdata:
+EOF
+
+mkdir -p docs etl/flows infra/terraform
+
+cat > docs/SPEC-001.md <<'EOF'
+# SPEC-001 — placeholder
+Open the project’s SPEC in the ChatGPT canvas and paste the Markdown here.
+EOF
+
+cat > infra/terraform/README.md <<'EOF'
+# Terraform (placeholder)
+Follow the SPEC Implementation section for AWS ap-southeast-5 resources and modules.
+EOF
+
+mkdir -p .vscode
+cat > .vscode/launch.json <<'EOF'
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API (uvicorn)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/.venv/bin/uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/econ",
+        "REDIS_URL": "redis://localhost:6379/0"
+      }
+    },
+    {
+      "name": "Web (Next.js)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/frontend/dashboard/node_modules/.bin/next",
+      "args": ["dev", "-p", "3000"],
+      "cwd": "${workspaceFolder}/frontend/dashboard",
+      "env": {
+        "NEXT_PUBLIC_API_BASE": "http://localhost:8000"
+      }
+    }
+  ]
+}
+EOF
+
+# -----------------------------
+# BACKEND
+# -----------------------------
+mkdir -p backend/app
+cat > backend/Dockerfile <<'EOF'
+FROM python:3.12-slim
+WORKDIR /app
+COPY pyproject.toml /app/pyproject.toml
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir fastapi==0.116.1 uvicorn[standard] pydantic==2.* python-dotenv psycopg[binary] redis
+COPY app /app/app
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EOF
+
+cat > backend/pyproject.toml <<'EOF'
+[project]
+name = "sim-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.116.1",
+  "uvicorn[standard]",
+  "pydantic>=2.0.0",
+  "python-dotenv",
+  "psycopg[binary]",
+  "redis"
+]
+EOF
+
+cat > backend/app/main.py <<'EOF'
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Economic Dev Simulator API")
+
+class RunRequest(BaseModel):
+    horizon_q: int = 40
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+@app.post("/scenarios/runs")
+def run_scenario(payload: RunRequest):
+    # Placeholder: wire up the simulation engine per SPEC
+    return {"run_id": "dev-run-1", "status": "done", "horizon_q": payload.horizon_q}
+EOF
+
+# -----------------------------
+# DATABASE
+# -----------------------------
+mkdir -p db
+cat > db/schema.sql <<'EOF'
+create schema if not exists meta; create schema if not exists core; create schema if not exists marts; create schema if not exists sim;
+create table if not exists meta.series (
+  series_id bigserial primary key,
+  code text unique not null,
+  title text not null,
+  freq text not null check (freq in ('M','Q','A')),
+  units text not null,
+  seasonal_adj text not null,
+  geo text not null,
+  sector text,
+  source text not null,
+  license text,
+  first_obs date,
+  last_obs date,
+  last_refresh timestamptz,
+  quality_flags jsonb default '{}'::jsonb
+);
+create table if not exists core.observation (
+  series_id bigint references meta.series(series_id),
+  ts date not null,
+  value numeric not null,
+  revision int not null default 1,
+  load_id uuid not null,
+  primary key (series_id, ts, revision)
+);
+create table if not exists sim.scenario (
+  scenario_id uuid primary key,
+  name text not null,
+  owner text not null,
+  created_at timestamptz not null default now(),
+  base_vintage text not null,
+  notes text,
+  tags jsonb default '{}'::jsonb
+);
+create table if not exists sim.config (
+  scenario_id uuid references sim.scenario(scenario_id) on delete cascade,
+  param jsonb not null
+);
+create table if not exists sim.run (
+  run_id uuid primary key,
+  scenario_id uuid references sim.scenario(scenario_id) on delete cascade,
+  started_at timestamptz not null default now(),
+  seed int,
+  status text not null,
+  engine_version text,
+  elapsed_ms int
+);
+create table if not exists sim.output (
+  run_id uuid references sim.run(run_id) on delete cascade,
+  metric_code text not null,
+  ts date not null,
+  value numeric not null,
+  p05 numeric,
+  p50 numeric,
+  p95 numeric,
+  unit text,
+  primary key (run_id, metric_code, ts)
+);
+EOF
+
+# -----------------------------
+# FRONTEND (Next.js App Router)
+# -----------------------------
+mkdir -p frontend/dashboard/src/app
+cat > frontend/dashboard/Dockerfile <<'EOF'
+FROM node:22-alpine
+WORKDIR /app
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+RUN npm ci || npm i
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+EOF
+
+cat > frontend/dashboard/package.json <<'EOF'
+{
+  "name": "dashboard",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000"
+  },
+  "dependencies": {
+    "next": "15.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "10.4.19",
+    "eslint": "9.9.0",
+    "postcss": "8.4.41",
+    "tailwindcss": "3.4.10",
+    "typescript": "5.5.4"
+  },
+  "engines": { "node": ">=20" }
+}
+EOF
+
+cat > frontend/dashboard/next.config.ts <<'EOF'
+import type { NextConfig } from 'next'
+const nextConfig: NextConfig = { reactStrictMode: true }
+export default nextConfig
+EOF
+
+cat > frontend/dashboard/tsconfig.json <<'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
+EOF
+
+cat > frontend/dashboard/postcss.config.mjs <<'EOF'
+export default { plugins: { tailwindcss: {}, autoprefixer: {} } }
+EOF
+
+cat > frontend/dashboard/tailwind.config.ts <<'EOF'
+import type { Config } from 'tailwindcss'
+export default {
+  content: ["./src/**/*.{js,ts,jsx,tsx,mdx}"],
+  theme: { extend: {} },
+  plugins: []
+} satisfies Config
+EOF
+
+mkdir -p frontend/dashboard/src/app
+cat > frontend/dashboard/src/app/globals.css <<'EOF'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+html, body { height: 100%; }
+EOF
+
+cat > frontend/dashboard/src/app/layout.tsx <<'EOF'
+import './globals.css'
+export const metadata = { title: 'Economic Dev Dashboard' }
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className="min-h-screen antialiased">{children}</body>
+    </html>
+  )
+}
+EOF
+
+cat > frontend/dashboard/src/app/page.tsx <<'EOF'
+export default async function Home() {
+  const url = (process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000') + '/health'
+  let ok = false
+  try {
+    const res = await fetch(url, { cache: 'no-store' })
+    ok = res.ok
+  } catch {}
+  return (
+    <main className="p-6 space-y-3">
+      <h1 className="text-2xl font-semibold">Economic Dev Dashboard (MVP)</h1>
+      <p>API health: <strong>{ok ? 'OK' : 'UNKNOWN'}</strong></p>
+      <p className="text-sm text-gray-600">Edit this page at <code>frontend/dashboard/src/app/page.tsx</code></p>
+    </main>
+  )
+}
+EOF
+
+# -----------------------------
+# ETL placeholder
+# -----------------------------
+mkdir -p etl/flows
+cat > etl/flows/README.md <<'EOF'
+# ETL Flows (Prefect 2.x)
+- Add source connectors per SPEC: BNM, OpenDOSM, WDI, IMF SDMX, NAPIC (manual import).
+- Write to `core.observation` and update `marts` views.
+EOF
+
+# -----------------------------
+# FINISH
+# -----------------------------
+echo "\nStarter repo created in: $(pwd)"
+echo "Next:"
+echo "  1) docker compose up --build" 
+echo "  2) Open http://localhost:3000 (web) and http://localhost:8000/docs (API)"
