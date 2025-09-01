@@ -1,0 +1,320 @@
+\#!/usr/bin/env bash
+
+# Usage: ./bootstrap.sh \[target-folder]
+
+# Creates a runnable starter repo for the Economic Development Simulator & Dashboard
+
+# including: API, Web, DB schema, and NEW: Prefect toy ETL + Simulation Engine skeleton.
+
+set -euo pipefail ROOT="\${1:-econ-dev-sim}" mkdir -p "\$ROOT" cd "\$ROOT"
+
+# ----------------------------------------------------
+
+# ROOT FILES
+
+# ----------------------------------------------------
+
+cat > README.md <<'EOF'
+
+# Economic Development Simulator & Dashboard — Starter Repo
+
+This repository bootstraps the MVP stack described in SPEC-001. It now includes:
+
+* **Backend API** (FastAPI) with a health endpoint and a **toy simulation engine**
+* **Frontend** (Next.js App Router) wired to the API
+* **Database** (PostgreSQL 16 + Timescale-ready schema) and **Redis** via Docker Compose
+* **ETL**: a **Prefect 2.x toy flow** to seed a demo series into the DB
+* **Developer tooling** for VS Code and Docker
+
+## Quick Start (Docker)
+
+```bash
+docker compose up --build
+# Web:  http://localhost:3000
+# API:  http://localhost:8000/docs
+```
+
+## Run the Prefect toy ETL (after DB is up)
+
+```bash
+# In a new terminal, at repo root
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r etl/requirements.txt
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/econ
+python etl/flows/toy_flow.py
+```
+
+This seeds a quarterly demo series into `core.observation`.
+
+## Trigger a toy scenario run
+
+Use the FastAPI docs at `http://localhost:8000/docs` → **POST** `/scenarios/runs`.
+
+## Import into your IDE
+
+* **VS Code**: open the folder → it picks up `.vscode/launch.json`. Press F5 to run API/Web individually.
+* **JetBrains**: add a Uvicorn run config for `backend` and an npm `dev` run for `frontend/dashboard`.
+
+## Next Steps
+
+* Paste your full SPEC content into `docs/SPEC-001.md` (copy from canvas).
+* Replace the toy engine with the semi-structural blocks from the SPEC under `backend/app/engine`.
+* Implement real ETL flows (BNM, DOSM, WDI, IMF) in `etl/flows/`.
+* Configure Terraform under `infra/` for AWS ap-southeast-5.
+
+## Structure
+
+```
+backend/               # FastAPI app + engine skeleton
+frontend/dashboard/    # Next.js app (App Router)
+etl/                   # Prefect flows (toy now; real later)
+db/                    # SQL schema
+docs/                  # SPEC and docs
+infra/                 # Terraform (placeholder)
+.vscode/               # IDE launch configs
+```
+
+EOF
+
+cat > .gitignore <<'EOF'
+
+# Node / Next.js
+
+node\_modules .next \*.log
+
+# Python
+
+.venv **pycache** \*.pyc
+
+# Env & tooling
+
+.env .env.\* .terraform terraform.tfstate\* .DS\_Store EOF
+
+cat > docker-compose.yml <<'EOF' services: db: image: postgres:16 environment: POSTGRES\_PASSWORD: postgres POSTGRES\_DB: econ ports: \[ "5432:5432" ] volumes: - pgdata:/var/lib/postgresql/data - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql\:ro
+
+redis: image: redis:7 ports: \[ "6379:6379" ]
+
+api: build: ./backend environment: DATABASE\_URL: postgresql://postgres\:postgres\@db:5432/econ REDIS\_URL: redis\://redis:6379/0 depends\_on: \[ db, redis ] ports: \[ "8000:8000" ]
+
+web: build: context: ./frontend/dashboard dockerfile: Dockerfile environment: NEXT\_PUBLIC\_API\_BASE: [http://localhost:8000](http://localhost:8000) depends\_on: \[ api ] ports: \[ "3000:3000" ]
+
+volumes: pgdata: EOF
+
+mkdir -p docs etl/flows infra/terraform
+
+cat > docs/SPEC-001.md <<'EOF'
+
+# SPEC-001 — placeholder
+
+Open the project’s SPEC in the ChatGPT canvas and paste the Markdown here. EOF
+
+cat > infra/terraform/README.md <<'EOF'
+
+# Terraform (placeholder)
+
+Follow the SPEC Implementation section for AWS ap-southeast-5 resources and modules. EOF
+
+mkdir -p .vscode cat > .vscode/launch.json <<'EOF' { "version": "0.2.0", "configurations": \[ { "name": "API (uvicorn)", "type": "python", "request": "launch", "program": "\${workspaceFolder}/backend/.venv/bin/uvicorn", "args": \["app.main\:app", "--reload", "--port", "8000"], "cwd": "\${workspaceFolder}/backend", "env": { "DATABASE\_URL": "postgresql://postgres\:postgres\@localhost:5432/econ", "REDIS\_URL": "redis\://localhost:6379/0" } }, { "name": "Web (Next.js)", "type": "node", "request": "launch", "program": "\${workspaceFolder}/frontend/dashboard/node\_modules/.bin/next", "args": \["dev", "-p", "3000"], "cwd": "\${workspaceFolder}/frontend/dashboard", "env": { "NEXT\_PUBLIC\_API\_BASE": "http\://localhost:8000" } } ] } EOF
+
+# ----------------------------------------------------
+
+# BACKEND — API + ENGINE SKELETON
+
+# ----------------------------------------------------
+
+mkdir -p backend/app/engine backend/app/service
+
+cat > backend/Dockerfile <<'EOF' FROM python:3.12-slim WORKDIR /app COPY pyproject.toml /app/pyproject.toml RUN pip install --upgrade pip &&&#x20;
+pip install --no-cache-dir fastapi==0.116.1 uvicorn\[standard] pydantic==2.\* python-dotenv psycopg\[binary] redis COPY app /app/app EXPOSE 8000 CMD \["uvicorn", "app.main\:app", "--host", "0.0.0.0", "--port", "8000"] EOF
+
+cat > backend/pyproject.toml <<'EOF' \[project] name = "sim-api" version = "0.1.0" requires-python = ">=3.12" dependencies = \[ "fastapi==0.116.1", "uvicorn\[standard]", "pydantic>=2.0.0", "python-dotenv", "psycopg\[binary]", "redis" ] EOF
+
+cat > backend/app/engine/model.py <<'EOF' """ Toy simulation engine implementing simplified credit channels. Replace elasticities with calibrated ones as per SPEC-001. """ from **future** import annotations from dataclasses import dataclass from typing import Dict, List import random
+
+@dataclass class ScenarioConfig: horizon\_q: int = 40 opr\_path\_bps: List\[int] = None total\_credit\_growth\_qq: float = 0.8  # % q/q share\_productive: float = 0.35 share\_consumption: float = 0.30 share\_speculative: float = 0.35 fiscal\_impulse\_pct\_gdp: float = 1.0  # annualized seed: int | None = 123 mc\_draws: int = 0  # 0 = deterministic
+
+```
+def __post_init__(self):
+    if self.opr_path_bps is None:
+        self.opr_path_bps = [0] * self.horizon_q
+```
+
+def run\_scenario(cfg: ScenarioConfig) -> Dict\[str, List\[float]]: rnd = random.Random(cfg.seed)
+
+```
+# State (levels, starting from 100 for convenience)
+y = 100.0  # real GDP index
+cpi = 100.0
+u = 4.0    # unemployment rate (%)
+hpi = 100.0
+
+# Parameters (toy elasticities)
+betaP, betaC = 0.30, 0.15
+betar = 0.05
+etaM, etar = 0.20, 0.05
+kappa = 0.25
+gamma = 0.35
+
+r_level = 3.0  # starting policy rate
+
+out = {k: [] for k in ["gdp_level", "cpi_level", "u_rate", "hpi_level", "opr"]}
+
+for t in range(cfg.horizon_q):
+    # policy rate path
+    r_level += cfg.opr_path_bps[t] / 100.0 / 100.0  # convert bps to pct
+    out["opr"].append(r_level)
+
+    # credit growth by use (% q/q)
+    gC_prod = cfg.total_credit_growth_qq * cfg.share_productive
+    gC_cons = cfg.total_credit_growth_qq * cfg.share_consumption
+    gC_spec = cfg.total_credit_growth_qq * cfg.share_speculative
+
+    # simple gaps (toy)
+    output_gap = (y - 100.0) / 100.0
+
+    # blocks -> quarterly growth rates (in %) for flows
+    I_g = betaP * gC_prod - betar * (r_level - 3.0) + 0.1 * output_gap * 100
+    C_g = betaC * gC_cons - 0.05 * max(0.0, r_level - 3.0)
+    HPI_g = etaM * gC_spec - etar * (r_level - 3.0)
+
+    # fiscal impulse (quarterly) split equally between C & I (toy)
+    fisc = (cfg.fiscal_impulse_pct_gdp / 4.0) * 0.6  # 60% effective
+    C_g += fisc * 100
+    I_g += fisc * 100
+
+    # combine to GDP growth (contribution weights)
+    gY = 0.55 * C_g + 0.25 * I_g  # toy aggregation
+
+    # noise (deterministic if mc_draws==0)
+    shock = 0.0 if cfg.mc_draws == 0 else rnd.gauss(0, 0.2)
+    gY += shock
+    pi_q = kappa * output_gap * 100 + 0.5 * shock
+
+    # update levels
+    y *= (1.0 + gY / 100.0)
+    cpi *= (1.0 + pi_q / 100.0)
+    hpi *= (1.0 + HPI_g / 100.0)
+    u = max(2.5, u - gamma * (gY - 1.0) / 100.0)  # Okun-like
+
+    # record
+    out["gdp_level"].append(round(y, 3))
+    out["cpi_level"].append(round(cpi, 3))
+    out["u_rate"].append(round(u, 3))
+    out["hpi_level"].append(round(hpi, 3))
+
+return out
+```
+
+EOF
+
+cat > backend/app/service/sim\_runner.py <<'EOF' from pydantic import BaseModel, Field from ..engine.model import ScenarioConfig, run\_scenario
+
+class RunRequest(BaseModel): horizon\_q: int = Field(40, ge=4, le=80) opr\_path\_bps: list\[int] | None = None credit\_total\_growth\_qq: float = 0.8 shares: dict = {"productive": 0.35, "consumption": 0.30, "speculative": 0.35} fiscal\_impulse\_pct\_gdp: float = 1.0 seed: int | None = 123 mc\_draws: int = 0
+
+```
+def to_cfg(self) -> ScenarioConfig:
+    return ScenarioConfig(
+        horizon_q=self.horizon_q,
+        opr_path_bps=self.opr_path_bps or [0]*self.horizon_q,
+        total_credit_growth_qq=self.credit_total_growth_qq,
+        share_productive=self.shares.get("productive", 0.35),
+        share_consumption=self.shares.get("consumption", 0.30),
+        share_speculative=self.shares.get("speculative", 0.35),
+        fiscal_impulse_pct_gdp=self.fiscal_impulse_pct_gdp,
+        seed=self.seed,
+        mc_draws=self.mc_draws,
+    )
+```
+
+def run(payload: RunRequest): cfg = payload.to\_cfg() return run\_scenario(cfg) EOF
+
+cat > backend/app/main.py <<'EOF' from fastapi import FastAPI from .service.sim\_runner import RunRequest, run as run\_engine
+
+app = FastAPI(title="Economic Dev Simulator API")
+
+@app.get("/health") def health(): return {"ok": True}
+
+@app.post("/scenarios/runs") def run\_scenario(payload: RunRequest): outputs = run\_engine(payload) return {"run\_id": "dev-run-1", "status": "done", "outputs": outputs} EOF
+
+# ----------------------------------------------------
+
+# DATABASE
+
+# ----------------------------------------------------
+
+mkdir -p db cat > db/schema.sql <<'EOF' create schema if not exists meta; create schema if not exists core; create schema if not exists marts; create schema if not exists sim; create table if not exists meta.series ( series\_id bigserial primary key, code text unique not null, title text not null, freq text not null check (freq in ('M','Q','A')), units text not null, seasonal\_adj text not null, geo text not null, sector text, source text not null, license text, first\_obs date, last\_obs date, last\_refresh timestamptz, quality\_flags jsonb default '{}'::jsonb ); create table if not exists core.observation ( series\_id bigint references meta.series(series\_id), ts date not null, value numeric not null, revision int not null default 1, load\_id uuid not null, primary key (series\_id, ts, revision) ); create table if not exists sim.scenario ( scenario\_id uuid primary key, name text not null, owner text not null, created\_at timestamptz not null default now(), base\_vintage text not null, notes text, tags jsonb default '{}'::jsonb ); create table if not exists sim.config ( scenario\_id uuid references sim.scenario(scenario\_id) on delete cascade, param jsonb not null ); create table if not exists sim.run ( run\_id uuid primary key, scenario\_id uuid references sim.scenario(scenario\_id) on delete cascade, started\_at timestamptz not null default now(), seed int, status text not null, engine\_version text, elapsed\_ms int ); create table if not exists sim.output ( run\_id uuid references sim.run(run\_id) on delete cascade, metric\_code text not null, ts date not null, value numeric not null, p05 numeric, p50 numeric, p95 numeric, unit text, primary key (run\_id, metric\_code, ts) ); EOF
+
+# ----------------------------------------------------
+
+# FRONTEND (Next.js App Router)
+
+# ----------------------------------------------------
+
+mkdir -p frontend/dashboard/src/app cat > frontend/dashboard/Dockerfile <<'EOF' FROM node:22-alpine WORKDIR /app COPY package.json package-lock.json\* yarn.lock\* pnpm-lock.yaml\* ./ RUN npm ci || npm i COPY . . EXPOSE 3000 CMD \["npm", "run", "dev"] EOF
+
+cat > frontend/dashboard/package.json <<'EOF' { "name": "dashboard", "private": true, "scripts": { "dev": "next dev -p 3000" }, "dependencies": { "next": "15.0.0", "react": "18.3.1", "react-dom": "18.3.1" }, "devDependencies": { "autoprefixer": "10.4.19", "eslint": "9.9.0", "postcss": "8.4.41", "tailwindcss": "3.4.10", "typescript": "5.5.4" }, "engines": { "node": ">=20" } } EOF
+
+cat > frontend/dashboard/next.config.ts <<'EOF' import type { NextConfig } from 'next' const nextConfig: NextConfig = { reactStrictMode: true } export default nextConfig EOF
+
+cat > frontend/dashboard/tsconfig.json <<'EOF' { "compilerOptions": { "target": "ES2020", "lib": \["dom", "dom.iterable", "esnext"], "allowJs": true, "skipLibCheck": true, "strict": true, "noEmit": true, "esModuleInterop": true, "module": "esnext", "moduleResolution": "bundler", "resolveJsonModule": true, "isolatedModules": true, "jsx": "preserve", "baseUrl": ".", "paths": { "@/*": \["./src/*"] } }, "include": \["next-env.d.ts", "**/\*.ts", "**/\*.tsx"], "exclude": \["node\_modules"] } EOF
+
+cat > frontend/dashboard/postcss.config.mjs <<'EOF' export default { plugins: { tailwindcss: {}, autoprefixer: {} } } EOF
+
+cat > frontend/dashboard/tailwind.config.ts <<'EOF' import type { Config } from 'tailwindcss' export default { content: \["./src/\*\*/\*.{js,ts,jsx,tsx,mdx}"], theme: { extend: {} }, plugins: \[] } satisfies Config EOF
+
+cat > frontend/dashboard/src/app/globals.css <<'EOF' @tailwind base; @tailwind components; @tailwind utilities; html, body { height: 100%; } EOF
+
+cat > frontend/dashboard/src/app/layout.tsx <<'EOF' import './globals.css' export const metadata = { title: 'Economic Dev Dashboard' } export default function RootLayout({ children }: { children: React.ReactNode }) { return (  {children}  ) } EOF
+
+cat > frontend/dashboard/src/app/page.tsx <<'EOF' export default async function Home() { const url = (process.env.NEXT\_PUBLIC\_API\_BASE || '[http://localhost:8000](http://localhost:8000)') + '/health' let ok = false try { const res = await fetch(url, { cache: 'no-store' }) ok = res.ok } catch {} return (  Economic Dev Dashboard (MVP) API health: {ok ? 'OK' : 'UNKNOWN'} Edit this page at frontend/dashboard/src/app/page.tsx  ) } EOF
+
+# ----------------------------------------------------
+
+# ETL — Prefect 2.x toy flow
+
+# ----------------------------------------------------
+
+cat > etl/requirements.txt <<'EOF' prefect==2.20.16 httpx==0.27.2 pandas==2.2.2 psycopg\[binary]==3.2.1 python-dotenv==1.0.1 EOF
+
+cat > etl/flows/toy\_flow\.py <<'EOF' """ Prefect 2.x toy flow:
+
+* Ensures a demo series exists in meta.series
+* Inserts 8 quarters of synthetic observations into core.observation Run:  export DATABASE\_URL=postgresql://postgres\:postgres\@localhost:5432/econ python etl/flows/toy\_flow\.py """ from **future** import annotations from datetime import date from uuid import uuid4 import os import psycopg from prefect import flow, task, get\_run\_logger
+
+SERIES\_CODE = "TOY.MYS.Q.DEMO.SYNTH.NSA"
+
+@task def ensure\_series(conn\_str: str): with psycopg.connect(conn\_str) as con, con.cursor() as cur: cur.execute(""" insert into meta.series(code, title, freq, units, seasonal\_adj, geo, source) values (%s,%s,'Q','index','NSA','MYS','TOY') on conflict (code) do nothing """, (SERIES\_CODE, "Toy Demo Index")) con.commit()
+
+@task def insert\_observations(conn\_str: str): load\_id = uuid4() start = date(2023, 1, 1) values = \[] level = 100.0 for q in range(8): level \*= 1.01  # +1% per quarter # approximate quarter start dates (Jan, Apr, Jul, Oct) month = \[1,4,7,10]\[q % 4] ts = date(2023 + (q//4), month, 1) values.append((ts, round(level, 3)))
+
+```
+with psycopg.connect(conn_str) as con, con.cursor() as cur:
+    cur.execute("select series_id from meta.series where code=%s", (SERIES_CODE,))
+    sid = cur.fetchone()[0]
+    for ts, val in values:
+        cur.execute(
+            """
+            insert into core.observation(series_id, ts, value, revision, load_id)
+            values (%s,%s,%s,1,%s)
+            on conflict (series_id, ts, revision) do update set value=excluded.value
+            """,
+            (sid, ts, val, load_id),
+        )
+    con.commit()
+```
+
+@flow(name="toy-seed-series") def toy\_flow(): logger = get\_run\_logger() conn = os.getenv("DATABASE\_URL", "postgresql://postgres\:postgres\@localhost:5432/econ") logger.info("Using DATABASE\_URL=%s", conn) ensure\_series(conn) insert\_observations(conn) logger.info("Seeded demo series: %s", SERIES\_CODE)
+
+if **name** == "**main**": toy\_flow() EOF
+
+# ----------------------------------------------------
+
+# FINISH
+
+# ----------------------------------------------------
+
+echo " Starter repo created in: \$(pwd)" cat <\<MSG Next steps:
+
+1. docker compose up --build
+2. Open [http://localhost:3000](http://localhost:3000) (web) and [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+3. In another terminal: python3 -m venv .venv && source .venv/bin/activate pip install -r etl/requirements.txt export DATABASE\_URL=postgresql://postgres\:postgres\@localhost:5432/econ python etl/flows/toy\_flow\.py MSG
